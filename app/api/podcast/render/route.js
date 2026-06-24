@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 import { renderSliceOverlays, buildFilterComplex } from '@/lib/podcast-overlay.js';
 
 export const runtime = 'nodejs';
-export const maxDuration = 600;
+export const maxDuration = 300;
 
 function ffmpeg(args) {
     return new Promise((resolve, reject) => {
