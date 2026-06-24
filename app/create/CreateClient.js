@@ -123,7 +123,7 @@ export default function CreateClient({ summary, models, imageSizes }) {
 
         {!summary.serverKeyConfigured ? (
           <div className="text-[11px] text-amber-400/80 bg-amber-400/5 border border-amber-400/20 rounded-md p-3">
-            No server key configured for <b>{summary.label}</b>. Set <code>FAL_KEY</code> (or <code>MUAPI_KEY</code>) in your env — see README.
+            No server key configured for <b>{summary.label}</b>. Set <code>LTX_API_KEY</code> (and optionally <code>FAL_KEY</code> for images) in your env.
           </div>
         ) : null}
 

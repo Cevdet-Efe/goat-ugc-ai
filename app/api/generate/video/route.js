@@ -11,18 +11,27 @@ export async function POST(request) {
             return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
         }
         const result = await generateVideo(body);
+
+        if (result.buffer) {
+            return new Response(result.buffer, {
+                status: 200,
+                headers: {
+                    'Content-Type': 'video/mp4',
+                    'X-Provider': result.provider || 'ltx',
+                    'X-Model': result.model || '',
+                },
+            });
+        }
+
         return NextResponse.json(result);
     } catch (error) {
         console.error('[api/generate/video]', error);
 
-        // Fish fal.ai's structured validation error out, if present, and
-        // translate the most common ones into user-friendly messages so the
-        // /video UI can surface them per-scene.
         const detail = error?.body?.detail?.[0];
         if (detail?.type === 'content_policy_violation') {
             return NextResponse.json({
                 error: 'content_policy_violation',
-                message: 'Seedance refused this image — it may show a recognizable face. Regenerating with a product/UI-focused prompt usually fixes it.',
+                message: 'The model refused this content. Try rephrasing the prompt or using a different subject.',
                 field: Array.isArray(detail.loc) ? detail.loc.join('.') : null,
             }, { status: 422 });
         }
@@ -32,6 +41,6 @@ export async function POST(request) {
             name: error.name,
             status: error.status,
             fieldDetail: detail?.msg || null,
-        }, { status: 500 });
+        }, { status: error.status || 500 });
     }
 }

@@ -9,7 +9,7 @@ const ANIMATIONS = [
     { id: 'static',      label: 'Static' },
 ];
 
-const DURATIONS = [5, 10];
+const DURATIONS = [6, 8, 10, 15, 20];
 
 function Field({ label, value, onChange, rows = 2, placeholder, mono = false }) {
     return (

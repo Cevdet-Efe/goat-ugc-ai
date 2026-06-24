@@ -18,19 +18,14 @@ function PlayerSkeleton() {
     );
 }
 
-const CLIP_DURATIONS = [5, 10];
+const CLIP_DURATIONS = [6, 8, 10, 15, 20];
 const TONES = ['cinematic', 'energetic', 'playful', 'authoritative', 'inspirational'];
 
-const VIDEO_MODELS_I2V = [
-    { id: 'seedance-2',         label: 'Seedance 2.0 (latest, recommended)' },
-    { id: 'seedance-2-fast',    label: 'Seedance 2.0 Fast (cheapest)' },
-    { id: 'kling-v2.1-master',  label: 'Kling v2.1 Master (premium)' },
-    { id: 'kling-v2.1-pro',     label: 'Kling v2.1 Pro' },
-    { id: 'kling-v2.1-standard',label: 'Kling v2.1 Standard' },
-];
-
-const VIDEO_MODELS_T2V = [
-    { id: 'seedance-2-t2v',     label: 'Seedance 2.0 (text-to-video)' },
+const VIDEO_MODELS = [
+    { id: 'ltx-2-3-pro',  label: 'LTX 2.3 Pro (best quality)' },
+    { id: 'ltx-2-3-fast', label: 'LTX 2.3 Fast (fastest)' },
+    { id: 'ltx-2-pro',    label: 'LTX 2 Pro (quality)' },
+    { id: 'ltx-2-fast',   label: 'LTX 2 Fast (speed)' },
 ];
 
 const IMAGE_MODELS = [
@@ -66,17 +61,32 @@ function reorder(arr, idx, delta) {
     return next;
 }
 
+async function parseVideoResponse(response) {
+    if (!response.ok) {
+        let errData;
+        try { errData = await response.json(); } catch { errData = { error: `Request failed (${response.status})` }; }
+        throw new Error(errData.message || errData.fieldDetail || errData.error || 'video clip failed');
+    }
+    const ct = response.headers.get('content-type') || '';
+    if (ct.includes('video/')) {
+        const blob = await response.blob();
+        return URL.createObjectURL(blob);
+    }
+    const data = await response.json();
+    if (!data.url) throw new Error(data.error || 'No video URL returned');
+    return data.url;
+}
+
 export default function VideoClient({ serverKeyConfigured, providerLabel }) {
     const [form, setForm] = useState({
         topic: '',
         tone: 'cinematic',
         audience: '',
-        clipDuration: 5,
+        clipDuration: 6,
         sceneCount: 6,
         imageModel: 'flux-schnell',
-        videoModel: 'seedance-2',
-        videoModelT2V: 'seedance-2-t2v',
-        textOnly: false,
+        videoModel: 'ltx-2-3-fast',
+        textOnly: true,
         useVideoClips: true,
     });
     const [plan, setPlan] = useState(null);
@@ -113,9 +123,9 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
             topic: template.topic,
             tone: template.tone || f.tone,
             sceneCount: template.sceneCount || f.sceneCount,
-            clipDuration: template.clipDuration || f.clipDuration,
+            clipDuration: Math.max(6, template.clipDuration || f.clipDuration),
             useVideoClips: template.useVideoClips ?? f.useVideoClips,
-            textOnly: template.textOnly ?? f.textOnly,
+            textOnly: template.textOnly ?? true,
         }));
     };
 
@@ -166,7 +176,6 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         try {
             let imageUrl = null;
             if (!localForm.textOnly) {
-                // 1. Anchor image — only when image-anchored mode is on.
                 const imageResponse = await fetch('/api/generate/image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -182,27 +191,23 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                 setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), imageUrl } }));
             }
 
-            // 2. Motion clip — Seedance / Kling i2v, or Seedance t2v if textOnly.
             if (localForm.useVideoClips || localForm.textOnly) {
-                const videoModelId = localForm.textOnly ? localForm.videoModelT2V : localForm.videoModel;
                 const videoBody = {
                     prompt: [scene.videoPrompt || 'subtle cinematic motion, camera drift, film grain', localForm.textOnly ? scene.imagePrompt : null]
                         .filter(Boolean).join('. '),
-                    model: videoModelId,
-                    duration: String(scene.duration || localForm.clipDuration),
+                    model: localForm.videoModel,
+                    duration: String(Math.max(6, scene.duration || localForm.clipDuration)),
                 };
-                if (!localForm.textOnly) videoBody.image_url = imageUrl;
+                if (!localForm.textOnly && imageUrl) videoBody.image_url = imageUrl;
+
                 const videoResponse = await fetch('/api/generate/video', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(videoBody),
                 });
-                const vd = await videoResponse.json();
-                if (!videoResponse.ok || !vd.url) {
-                    const friendly = vd.message || vd.fieldDetail || vd.error || 'video clip failed';
-                    throw new Error(friendly);
-                }
-                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl: vd.url } }));
+
+                const videoUrl = await parseVideoResponse(videoResponse);
+                setAssets((a) => ({ ...a, [scene.id]: { ...(a[scene.id] || {}), videoUrl } }));
             }
         } catch (err) {
             setErrors((e) => ({ ...e, byScene: { ...e.byScene, [scene.id]: err.message } }));
@@ -215,7 +220,6 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         }
     }, []);
 
-    // ── Scene editor mutators ────────────────────────────────────────────────
     const updateScene = (id, patch) => {
         setPlan((p) => p && ({ ...p, scenes: p.scenes.map((s) => s.id === id ? { ...s, ...patch } : s) }));
     };
@@ -264,26 +268,22 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
         if (!plan) return;
         const { default: JSZip } = await import('jszip');
         const zip = new JSZip();
-        zip.file('plan.json', JSON.stringify({ plan, assets, form }, null, 2));
+        zip.file('plan.json', JSON.stringify({ plan, assets: Object.fromEntries(
+            Object.entries(assets).map(([k, v]) => [k, { imageUrl: v.imageUrl || null, videoUrl: v.videoUrl?.startsWith('blob:') ? '[blob — re-render to download]' : (v.videoUrl || null) }])
+        ), form }, null, 2));
         zip.file('README.txt', [
-            'GOAT UGC AI — exported asset bundle',
+            'GOAT UGC AI — exported asset bundle (LTX Video)',
             '',
             'plan.json          full scene list with prompts and the original brief',
             'scene-N-image.jpg  anchor still (image-anchored mode only)',
             'scene-N-video.mp4  generated motion clip',
-            '',
-            'Local Remotion render:',
-            '  1. npx create-video my-video',
-            '  2. Drop this folder into public/assets/',
-            '  3. Sequence scene-N-video.mp4 for `scene.duration` seconds each',
-            '  4. npx remotion render',
         ].join('\n'));
         const fetches = Object.entries(assets).map(async ([id, a]) => {
             if (a.imageUrl) {
                 try { const blob = await fetch(a.imageUrl).then((r) => r.blob()); zip.file(`scene-${id}-image.jpg`, blob); }
                 catch { /* skip */ }
             }
-            if (a.videoUrl) {
+            if (a.videoUrl && !a.videoUrl.startsWith('blob:')) {
                 try { const blob = await fetch(a.videoUrl).then((r) => r.blob()); zip.file(`scene-${id}-video.mp4`, blob); }
                 catch { /* skip */ }
             }
@@ -299,7 +299,6 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
 
     const allReady = totalScenes > 0 && doneIds.size === totalScenes;
     const totalDurationSec = form.sceneCount * form.clipDuration;
-    const visibleVideoModels = form.textOnly ? VIDEO_MODELS_T2V : VIDEO_MODELS_I2V;
 
     return (
         <div className="grid lg:grid-cols-[400px_1fr] gap-6">
@@ -320,14 +319,6 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                             </button>
                         ))}
                     </div>
-                    <a
-                        href="https://github.com/burhankocabiyik/videomaker/blob/main/PROMPT_LIBRARY.md"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[10px] text-white/40 hover:text-white/70 mt-2 inline-block"
-                    >
-                        Read the full prompt library →
-                    </a>
                 </div>
 
                 <div>
@@ -403,7 +394,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                             onChange={(e) => onChange({ textOnly: e.target.checked, useVideoClips: true })}
                             className="accent-[#d9ff00] w-4 h-4"
                         />
-                        <span><b>Text-to-video mode</b> — skip anchor images, generate clips straight from prompts</span>
+                        <span><b>Text-to-video mode</b> — skip anchor images, generate clips straight from prompts (recommended for LTX)</span>
                     </label>
                 </div>
 
@@ -417,17 +408,18 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                         >
                             {IMAGE_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                         </select>
+                        <div className="text-[10px] text-amber-400/60 mt-1">Requires FAL_KEY for image generation</div>
                     </div>
                 ) : null}
 
                 <div>
-                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Video model</label>
+                    <label className="block text-[11px] font-bold text-white/40 uppercase tracking-wider mb-2">Video model (LTX Video)</label>
                     <select
-                        value={form.textOnly ? form.videoModelT2V : form.videoModel}
-                        onChange={(e) => onChange(form.textOnly ? { videoModelT2V: e.target.value } : { videoModel: e.target.value })}
+                        value={form.videoModel}
+                        onChange={(e) => onChange({ videoModel: e.target.value })}
                         className="w-full bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#d9ff00]/30"
                     >
-                        {visibleVideoModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                        {VIDEO_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                 </div>
 
@@ -441,7 +433,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
 
                 {!serverKeyConfigured ? (
                     <div className="text-[11px] text-amber-400/80 bg-amber-400/5 border border-amber-400/20 rounded-md p-3">
-                        No server key for <b>{providerLabel}</b>. Set <code>FAL_KEY</code> on Vercel and redeploy.
+                        No server key for <b>{providerLabel}</b>. Set <code>LTX_API_KEY</code> on Vercel and redeploy.
                     </div>
                 ) : null}
                 {errors.global ? (
@@ -449,8 +441,8 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                 ) : null}
 
                 <div className="text-[11px] text-white/40 leading-relaxed">
-                    Heads up: each Seedance/Kling clip lands in 60–180 s. Scenes render in parallel; a 10-scene 1m40s video
-                    typically finishes in ~3 minutes. Up to 5 minutes total / 30 scenes supported.
+                    Powered by LTX Video. Fast mode generates clips in ~10s, Pro mode in 30-60s.
+                    Scenes render in parallel. LTX supports 6-20 second clips at up to 4K resolution.
                 </div>
             </form>
 
@@ -496,7 +488,7 @@ export default function VideoClient({ serverKeyConfigured, providerLabel }) {
                                 + Add scene
                             </button>
                             <span className="text-[11px] text-white/40 ml-auto">
-                                {allReady ? 'All clips ready · play above' : 'Scenes fill in as fal.ai returns each clip.'}
+                                {allReady ? 'All clips ready · play above' : 'Scenes fill in as LTX Video returns each clip.'}
                             </span>
                         </div>
                     </div>
